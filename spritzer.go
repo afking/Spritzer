@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"text/template"
 )
 
 func main() {
@@ -32,7 +33,7 @@ func main() {
 			}
 			reader.Close()
 
-			s.images = append(s.images, img{f.Name(), image.Rect(0, 0, imgConfig.Width, imgConfig.Height)})
+			s.images = append(s.images, img{strings.TrimSuffix(f.Name(), ".png"), image.Rect(0, 0, imgConfig.Width, imgConfig.Height)})
 		}
 	}
 
@@ -40,41 +41,41 @@ func main() {
 
 	var sumX int
 	for i := 0; i < len(s.images); i++ {
-		s.images[i].box = s.images[i].box.Add(image.Point{sumX, 0})
-		sumX += s.images[i].box.Dx()
+		s.images[i].Box = s.images[i].Box.Add(image.Point{sumX, 0})
+		sumX += s.images[i].Box.Dx()
 	}
 
-	s.imagesOpt = append([]img{}, s.images...)
-	s.baseOpt = image.Point{sumX, s.images[0].box.Dy()}
+	s.ImagesOpt = append([]img{}, s.images...)
+	s.baseOpt = image.Point{sumX, s.images[0].Box.Dy()}
 
 	// Iteration
 	var sumY int
 	imgNo := len(s.images)
 	for j := 0; j < imgNo; j++ {
-		sumY += s.images[j].box.Dy()
+		sumY += s.images[j].Box.Dy()
 		b := boxes{inf: []image.Rectangle{image.Rect(0, 0, 1, sumY)}}
 		for i := 0; i < imgNo; i++ {
-			s.images[i].box = b.boxFind(s.images[i].box)
-			b.boxCut(s.images[i].box)
+			s.images[i].Box = b.boxFind(s.images[i].Box)
+			b.boxCut(s.images[i].Box)
 		}
 		s.base = image.Point{0, 0}
 		for i := 0; i < imgNo; i++ {
-			if s.images[i].box.Max.X > s.base.X {
-				s.base = image.Point{s.images[i].box.Max.X, sumY}
+			if s.images[i].Box.Max.X > s.base.X {
+				s.base = image.Point{s.images[i].Box.Max.X, sumY}
 			}
 		}
 		if s.base.X*s.base.Y < s.baseOpt.X*s.baseOpt.Y {
-			s.imagesOpt = append([]img{}, s.images...)
+			s.ImagesOpt = append([]img{}, s.images...)
 			s.baseOpt = image.Point{s.base.X, s.base.Y}
 		}
 	}
 
-	// Write sprite
+	// Write spritew
 	m := image.NewRGBA(image.Rect(0, 0, s.baseOpt.X, s.baseOpt.Y))
 	draw.Draw(m, m.Bounds(), image.Transparent, image.ZP, draw.Src)
 
-	for _, f := range s.imagesOpt {
-		reader, err := os.Open(f.name)
+	for _, f := range s.ImagesOpt {
+		reader, err := os.Open(f.Name + ".png")
 		if err != nil {
 			panic(err)
 		}
@@ -85,7 +86,7 @@ func main() {
 		}
 		reader.Close()
 
-		draw.Draw(m, f.box, i, image.Point{0, 0}, draw.Src)
+		draw.Draw(m, f.Box, i, image.Point{0, 0}, draw.Src)
 	}
 
 	w, err := os.Create("sprite.png")
@@ -98,18 +99,32 @@ func main() {
 
 	// Encode css
 	// .spriteName {background-position: widthpx heightpx}
+	w, err = os.Create("sprite.css")
+	if err != nil {
+		panic(err)
+	}
+
+	tmpl, err := template.New("css").Parse("{{range $a := .ImagesOpt}}.sprite{{$a.Name}} {background-position: -{{$a.Box.Min.X}} -{{$a.Box.Min.Y}}} \n{{end}}")
+	if err != nil {
+		panic(err)
+	}
+	err = tmpl.Execute(w, s)
+	if err != nil {
+		panic(err)
+	}
+	w.Close()
 
 	fmt.Println("Success")
 }
 
 type sprite struct {
-	images, imagesOpt []img
+	images, ImagesOpt []img
 	base, baseOpt     image.Point
 }
 
 type img struct {
-	name string
-	box  image.Rectangle
+	Name string
+	Box  image.Rectangle
 }
 
 type boxes struct {
@@ -262,4 +277,4 @@ type byHeight []img
 
 func (a byHeight) Len() int           { return len(a) }
 func (a byHeight) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a byHeight) Less(i, j int) bool { return a[i].box.Dy() > a[j].box.Dy() }
+func (a byHeight) Less(i, j int) bool { return a[i].Box.Dy() > a[j].Box.Dy() }
