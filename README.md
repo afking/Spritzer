@@ -1,0 +1,4 @@
+Spritzer
+========
+
+Simple sprite packager
