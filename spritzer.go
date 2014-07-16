@@ -70,7 +70,7 @@ func main() {
 		}
 	}
 
-	// Write spritew
+	// Write sprite
 	m := image.NewRGBA(image.Rect(0, 0, s.baseOpt.X, s.baseOpt.Y))
 	draw.Draw(m, m.Bounds(), image.Transparent, image.ZP, draw.Src)
 
