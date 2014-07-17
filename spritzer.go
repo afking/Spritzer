@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/nfnt/resize"
 	"image"
 	"image/draw"
 	"image/png"
@@ -13,23 +14,35 @@ import (
 )
 
 func main() {
+	errHandle(spritzer)
+	fmt.Println("Success <3 ")
+}
+
+func errHandle(f func() error) {
+	if err := f(); err != nil {
+		fmt.Println("error: ", err)
+	}
+	return
+}
+
+func spritzer() error {
 	s := sprite{}
 
 	files, err := ioutil.ReadDir("./")
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	for _, f := range files {
-		if strings.HasSuffix(f.Name(), ".png") && f.Name() != "sprite.png" {
+		if strings.HasSuffix(f.Name(), ".png") && !strings.Contains(f.Name(), "Retina") && !strings.Contains(f.Name(), "sprite") {
 			reader, err := os.Open(f.Name())
 			if err != nil {
-				panic(err)
+				return err
 			}
 
 			imgConfig, err := png.DecodeConfig(reader)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			reader.Close()
 
@@ -45,8 +58,14 @@ func main() {
 		sumX += s.images[i].Box.Dx()
 	}
 
+	// Check for images
+	if s.images == nil {
+		err = fmt.Errorf("no images")
+		return err
+	}
+
 	s.ImagesOpt = append([]img{}, s.images...)
-	s.baseOpt = image.Point{sumX, s.images[0].Box.Dy()}
+	s.BaseOpt = image.Point{sumX, s.images[0].Box.Dy()}
 
 	// Iteration
 	var sumY int
@@ -64,62 +83,93 @@ func main() {
 				s.base = image.Point{s.images[i].Box.Max.X, sumY}
 			}
 		}
-		if s.base.X*s.base.Y < s.baseOpt.X*s.baseOpt.Y {
+		if s.base.X*s.base.Y < s.BaseOpt.X*s.BaseOpt.Y {
 			s.ImagesOpt = append([]img{}, s.images...)
-			s.baseOpt = image.Point{s.base.X, s.base.Y}
+			s.BaseOpt = image.Point{s.base.X, s.base.Y}
 		}
 	}
 
-	// Write sprite
-	m := image.NewRGBA(image.Rect(0, 0, s.baseOpt.X, s.baseOpt.Y))
+	// Write sprite, retina support
+	m := image.NewRGBA(image.Rect(0, 0, s.BaseOpt.X, s.BaseOpt.Y))
+	mRetina := image.NewRGBA(image.Rect(0, 0, s.BaseOpt.X*2, s.BaseOpt.Y*2))
 	draw.Draw(m, m.Bounds(), image.Transparent, image.ZP, draw.Src)
+	draw.Draw(mRetina, mRetina.Bounds(), image.Transparent, image.ZP, draw.Src)
 
+	var iRetina image.Image
 	for _, f := range s.ImagesOpt {
-		reader, err := os.Open(f.Name + ".png")
-		if err != nil {
-			panic(err)
+		i := pngDecode(f.Name + ".png")
+
+		// Check for retina file
+		if _, err := os.Stat(f.Name + "Retina.png"); err == nil {
+			iRetina = pngDecode(f.Name + "Retina.png")
+		} else {
+			// Resize image !should not be used
+			fmt.Println("warning: non retina image being used: ", f.Name+".png")
+			iRetina = resize.Resize(uint(f.Box.Dx()*2), 0, i, resize.Lanczos3)
 		}
 
-		i, err := png.Decode(reader)
-		if err != nil {
-			panic(err)
-		}
-		reader.Close()
+		fBoxRetina := image.Rect(f.Box.Min.X*2, f.Box.Min.Y*2, f.Box.Max.X*2, f.Box.Max.Y*2)
 
 		draw.Draw(m, f.Box, i, image.Point{0, 0}, draw.Src)
+		draw.Draw(mRetina, fBoxRetina, iRetina, image.Point{0, 0}, draw.Src)
 	}
 
 	w, err := os.Create("sprite.png")
 	if err != nil {
-		panic(err)
+		return err
+	}
+	wRetina, err := os.Create("spriteRetina.png")
+	if err != nil {
+		return err
 	}
 
 	png.Encode(w, m)
 	w.Close()
+	png.Encode(wRetina, mRetina)
+	wRetina.Close()
 
 	// Encode css
 	// .spriteName {background-position: widthpx heightpx}
 	w, err = os.Create("sprite.css")
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	tmpl, err := template.New("css").Parse("{{range $a := .ImagesOpt}}.sprite{{$a.Name}} {background-position: -{{$a.Box.Min.X}} -{{$a.Box.Min.Y}}} \n{{end}}")
+	tmp := `
+.sprite {
+  background-image:url("../img/sprite.png") !important;
+  background-size: {{.BaseOpt.X}}px {{.BaseOpt.Y}}px;
+  background-repeat: no-repeat;
+  background-color: transparent;
+  overflow: hidden;
+}
+
+@media 
+(-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) { 
+  .sprite {
+    background-image:url("../img/spriteRetina.png") !important;
+    background-size: {{.BaseOpt.X}}px {{.BaseOpt.Y}}px;
+  }
+}
+
+{{range $a := .ImagesOpt}}.sprite{{$a.Name}} {background-position: -{{$a.Box.Min.X}}px -{{$a.Box.Min.Y}}px}` + "\n" + `{{end}}`
+
+	tmpl, err := template.New("css").Parse(tmp)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	err = tmpl.Execute(w, s)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	w.Close()
 
-	fmt.Println("Success")
+	return nil
 }
 
 type sprite struct {
 	images, ImagesOpt []img
-	base, baseOpt     image.Point
+	base, BaseOpt     image.Point
 }
 
 type img struct {
@@ -205,51 +255,6 @@ func appendIfUnique(slice []int, i int) []int {
 	return append(slice, i)
 }
 
-/*
-func (b *boxes) boxCut(i image.Rectangle) {
-	maxInf := len(b.inf)
-	boxInf := append([]image.Rectangle{}, b.inf...)
-	for n := 0; n < maxInf; n++ {
-		rec := boxInf[n]
-		if i.Overlaps(rec) || i.Min.X > rec.Max.X {
-			b.newBoxInf(rec.Min.X, i.Max.Y, rec.Min.X+1, rec.Max.Y)
-			b.newBoxInf(i.Max.X, rec.Min.Y, i.Max.X+1, rec.Max.Y)
-			b.newBoxInf(rec.Min.X, rec.Min.Y, rec.Min.X+1, i.Min.Y)
-			b.newBox(rec.Min.X, rec.Min.Y, i.Min.X, rec.Max.Y)
-		}
-		/*
-			rec := boxInf[n]
-			Drec := rec.Max.Y - i.Max.Y
-			Di := i.Max.Y - rec.Max.Y
-
-			if i.Overlaps(rec) || (Di >= 0 && Di <= i.Dy()) || (Drec >= 0 && Drec <= rec.Dy()) {
-				b.inf = append(b.inf[:n], b.inf[n+1:]...)
-				// Create 3 boxes
-				b.newBoxInf(rec.Min.X, i.Max.Y, rec.Min.X+1, rec.Max.Y)
-				b.newBoxInf(i.Max.X, rec.Min.Y, i.Max.X+1, rec.Max.Y)
-				b.newBoxInf(rec.Min.X, rec.Min.Y, rec.Min.X+1, i.Min.Y)
-
-				b.newBox(rec.Min.X, rec.Min.Y, i.Min.X, rec.Max.Y)
-			}
-
-	}
-
-	maxBox := len(b.box)
-	boxBox := append([]image.Rectangle{}, b.box...)
-	for n := 0; n < maxBox; n++ {
-		rec := boxBox[n]
-		if i.Overlaps(rec) {
-			b.box = append(b.box[:n], b.box[n+1:]...)
-			// Create 4 boxes
-			b.newBox(rec.Min.X, rec.Min.Y, rec.Max.X, i.Min.Y)
-			b.newBox(rec.Min.X, rec.Min.Y, i.Min.X, rec.Max.Y)
-			b.newBox(rec.Min.X, i.Max.Y, rec.Max.X, rec.Max.Y)
-			b.newBox(i.Max.X, rec.Min.Y, rec.Max.X, rec.Max.Y)
-		}
-	}
-}
-*/
-
 func (b *boxes) newBox(x0, y0, x1, y1 int) {
 	if x0 > x1 || y0 > y1 {
 		return
@@ -270,6 +275,20 @@ func (b *boxes) newBoxInf(x0, y0, x1, y1 int) {
 		b.inf = append(b.inf, box)
 	}
 	return
+}
+
+func pngDecode(file string) image.Image {
+	reader, err := os.Open(file)
+	if err != nil {
+		panic(err)
+	}
+
+	i, err := png.Decode(reader)
+	if err != nil {
+		panic(err)
+	}
+	reader.Close()
+	return i
 }
 
 // byHeight implements the sort.Interface for []img based on hieght field
